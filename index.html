@@ -50,7 +50,12 @@ body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);heigh
 .file-info-pages{font-size:14px;color:var(--success);font-family:var(--mono)}
 .file-info-po{font-size:15px;font-family:var(--mono);font-weight:500;display:flex;align-items:center;gap:12px}
 .file-info-po .po-date{color:var(--text)}
-.file-info-po .po-num{} /* color set by JS */
+.file-info-po .po-num{}
+.days-input-wrap{display:none;align-items:center;gap:6px;margin-left:12px;flex-shrink:0}
+.days-input-wrap.show{display:flex}
+.days-input{width:100px;background:#1a2236;border:1px solid var(--border-bright);border-radius:6px;color:var(--text);font-family:var(--mono);font-size:15px;font-weight:500;padding:3px 8px;text-align:center;outline:none;}
+.days-input:focus{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-glow)}
+.days-label{font-size:14px;color:var(--text-dim);font-family:var(--mono)}
 /* ── 컬럼 헤더 고정행 ── */
 .col-header{background:var(--surface2);border-bottom:2px solid var(--border-bright);display:none;overflow:hidden;}
 .col-header.show{display:block}
@@ -161,6 +166,10 @@ tfoot .total-nearest-date.over-limit{color:var(--success)}
       <span class="po-date" id="info-po-date"></span>
       <span id="info-po-num"></span>
     </div>
+    <div class="days-input-wrap" id="days-input-wrap">
+      <input type="number" id="days-input" class="days-input" min="1" max="365" value="90">
+      <span class="days-label">일 이내이면 DELIVERY DATE 이 PINK 로 변환됨</span>
+    </div>
     <div style="flex:1"></div>
   </div>
   <!-- ④ 컬럼 헤더 고정행 -->
@@ -264,6 +273,8 @@ $('btn-clear').addEventListener('click', function(){
   $('info-pages').textContent = '';
   $('info-po-date').textContent = '';
   $('info-po-num').textContent = '';
+  $('days-input-wrap').classList.remove('show');
+  $('days-input').value = 90;
   setStatus('', 'Ready — drop a PDF to begin');
   $('file-input').value = '';
   $('table-body').innerHTML = '';
@@ -342,6 +353,10 @@ async function handleFile(file) {
     } else {
       poNumEl.textContent = '';
     }
+    // 날수 입력란: 기본값 설정 후 표시
+    var defaultDays = result.poType === 'AIR' ? 45 : 90;
+    $('days-input').value = defaultDays;
+    $('days-input-wrap').classList.add('show');
 
     setStatus('ready', 'Parsed — ' + result.items.length + ' line items');
     $('btn-export').disabled = false;
@@ -510,8 +525,9 @@ function renderTable(data) {
     return m ? new Date(+m[3], monthMap[m[2]], +m[1]) : null;
   }
 
-  // ORDER DATE 기준 한계선 (OCEAN=90일, AIR=45일)
-  var limitDays = data.poType === 'AIR' ? 45 : 90;
+  // ORDER DATE 기준 한계선: 입력란 값 우선, 없으면 기본값(OCEAN=90, AIR=45)
+  var inputDays = parseInt($('days-input').value);
+  var limitDays = (!isNaN(inputDays) && inputDays > 0) ? inputDays : (data.poType === 'AIR' ? 45 : 90);
   var limitDate = null;
   if (data.orderDate) {
     var od = parseDate(data.orderDate);
@@ -607,6 +623,53 @@ $('btn-export-txt').addEventListener('click', function() {
   document.body.removeChild(a); URL.revokeObjectURL(url);
   toast(partNumbers.length + '개 Part Number TXT 저장됨', 'success');
 });
+
+/* ── REFRESH DATE COLORS (테이블 재렌더 없이 날짜 색상만 업데이트) ── */
+function refreshDateColors() {
+  if (!parsedData) return;
+  var inputDays = parseInt($('days-input').value);
+  var limitDays = (!isNaN(inputDays) && inputDays > 0) ? inputDays
+                  : (parsedData.poType === 'AIR' ? 45 : 90);
+  var monthMap = {JAN:0,FEB:1,MAR:2,APR:3,MAY:4,JUN:5,JUL:6,AUG:7,SEP:8,OCT:9,NOV:10,DEC:11};
+  function parseDate(str) {
+    var m = str ? str.match(/(\d{2})-([A-Z]{3})-(\d{4})/) : null;
+    return m ? new Date(+m[3], monthMap[m[2]], +m[1]) : null;
+  }
+  var limitDate = null;
+  if (parsedData.orderDate) {
+    var od = parseDate(parsedData.orderDate);
+    if (od) limitDate = new Date(od.getTime() + limitDays * 86400000);
+  }
+  // tbody 날짜 셀 (7번째 열) 색상 업데이트
+  var rows = document.querySelectorAll('#table-body tr');
+  var items = parsedData.items;
+  for (var r = 0; r < rows.length; r++) {
+    var cells = rows[r].querySelectorAll('td');
+    var dateCell = cells[6]; // Delivery Date = 7번째 열
+    if (!dateCell) continue;
+    var dt = parseDate(dateCell.textContent.trim());
+    if (limitDate && dt && dt <= limitDate) {
+      dateCell.className = 'date within_limit';
+    } else {
+      dateCell.className = 'date';
+    }
+  }
+  // tfoot 날짜 색상 업데이트
+  var tfootDate = document.querySelector('#table-foot .total-nearest-date');
+  if (tfootDate) {
+    var ndt = parseDate(tfootDate.textContent.trim());
+    if (limitDate && ndt && ndt <= limitDate) {
+      tfootDate.className = 'total-nearest-date';
+    } else {
+      tfootDate.className = 'total-nearest-date over-limit';
+    }
+  }
+}
+// 입력란 이벤트: Enter 키 또는 포커스 이탈 시 색상 즉시 갱신
+$('days-input').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') { e.preventDefault(); refreshDateColors(); this.blur(); }
+});
+$('days-input').addEventListener('change', function() { refreshDateColors(); });
 
 /* ── FREEZE HEADER ── */
 function adjustContentTop() {
